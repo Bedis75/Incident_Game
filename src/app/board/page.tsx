@@ -41,6 +41,7 @@ type GameState = {
   teams: TeamState[];
   currentTeamIndex: number;
   lastRoll: number | null;
+  rollSequence: number;
   turnMessage: string;
   pendingQuestion: Question | null;
   answerReveal: AnswerReveal | null;
@@ -114,7 +115,8 @@ export default function GameBoardPage() {
   const [frozenTeams, setFrozenTeams] = useState<TeamState[] | null>(null);
 
   const previousGameStateRef = useRef<GameState | null>(null);
-  const previousRollRef = useRef<number | null>(null);
+  const previousRollSequenceRef = useRef<number>(0);
+  const previousLastRollRef = useRef<number | null>(null);
   const questionKeyRef = useRef("");
   const qcmShowTimeoutRef = useRef<number | null>(null);
   const qcmHideTimeoutRef = useRef<number | null>(null);
@@ -200,16 +202,22 @@ export default function GameBoardPage() {
   }, []);
 
   useEffect(() => {
+    const rollSequence = Number(gameState?.rollSequence || 0);
     const lastRoll = gameState?.lastRoll ?? null;
+    const hasSequenceTrigger = rollSequence > 0 && previousRollSequenceRef.current !== rollSequence;
+    const hasLastRollFallbackTrigger = rollSequence === 0 && lastRoll !== null && previousLastRollRef.current !== lastRoll;
 
-    if (lastRoll === null || previousRollRef.current === lastRoll) {
+    if (lastRoll === null || (!hasSequenceTrigger && !hasLastRollFallbackTrigger)) {
       previousGameStateRef.current = gameState;
       return;
     }
 
     const previousTeams = previousGameStateRef.current?.teams || null;
     setFrozenTeams(previousTeams);
-    previousRollRef.current = lastRoll;
+    if (hasSequenceTrigger) {
+      previousRollSequenceRef.current = rollSequence;
+    }
+    previousLastRollRef.current = lastRoll;
     setIsDiceRolling(true);
     let ticks = 0;
     const totalTicks = 12;
@@ -231,7 +239,7 @@ export default function GameBoardPage() {
     return () => {
       window.clearInterval(intervalId);
     };
-  }, [gameState?.lastRoll]);
+  }, [gameState?.lastRoll, gameState?.rollSequence]);
 
   useEffect(() => {
     previousGameStateRef.current = gameState;
