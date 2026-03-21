@@ -1566,6 +1566,13 @@ ol {
   letter-spacing: 0.08em;
 }
 
+.ig-qcm-card .selection-label.ig-qcm-timer {
+  justify-self: end;
+  background: #ffffff1f;
+  border-color: #fff3;
+  font-weight: 800;
+}
+
 .ig-qcm-card .selection-value {
   margin: 0;
   color: #f8f7ff;

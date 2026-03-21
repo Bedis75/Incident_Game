@@ -44,6 +44,7 @@ type GameState = {
   rollSequence: number;
   turnMessage: string;
   pendingQuestion: Question | null;
+  pendingQuestionOpenedAt?: number | null;
   answerReveal: AnswerReveal | null;
   pendingNeutral: boolean;
   pendingTrap: PendingTrap | null;
@@ -80,6 +81,7 @@ const TEAM_COLOR_CLASSES = [
   "team-color-pink",
   "team-color-green",
 ];
+const QUESTION_TIMEOUT_MS = 45000;
 
 function getPipPattern(face: number): number[] {
   if (face === 1) return [4];
@@ -109,6 +111,8 @@ export default function GameBoardClient() {
   const [qcmFeedback, setQcmFeedback] = useState<QcmFeedback | null>(null);
   const [displayQuestion, setDisplayQuestion] = useState<Question | null>(null);
   const [isQcmVisible, setIsQcmVisible] = useState(false);
+  const [timerNow, setTimerNow] = useState(Date.now());
+  const [localQuestionOpenedAt, setLocalQuestionOpenedAt] = useState<number | null>(null);
   const [rollingFace, setRollingFace] = useState(1);
   const [isDiceRolling, setIsDiceRolling] = useState(false);
   const [frozenTeams, setFrozenTeams] = useState<TeamState[] | null>(null);
@@ -117,6 +121,7 @@ export default function GameBoardClient() {
   const previousRollSequenceRef = useRef<number>(0);
   const previousLastRollRef = useRef<number | null>(null);
   const questionKeyRef = useRef("");
+  const timeoutSubmitQuestionKeyRef = useRef("");
   const qcmShowTimeoutRef = useRef<number | null>(null);
   const qcmHideTimeoutRef = useRef<number | null>(null);
 
@@ -284,6 +289,7 @@ export default function GameBoardClient() {
     }
 
     if (!pendingQuestion) {
+      timeoutSubmitQuestionKeyRef.current = "";
       if (!qcmFeedback) {
         setIsQcmVisible(false);
         setDisplayQuestion(null);
@@ -305,6 +311,52 @@ export default function GameBoardClient() {
       setIsQcmVisible(true);
     }, 2000);
   }, [gameState?.pendingQuestion, gameState?.answerReveal, isDiceRolling, qcmFeedback]);
+
+  useEffect(() => {
+    const pendingQuestion = gameState?.pendingQuestion ?? null;
+    if (!pendingQuestion) {
+      setLocalQuestionOpenedAt(null);
+      return;
+    }
+
+    const serverOpenedAt = Number(gameState?.pendingQuestionOpenedAt || 0);
+    if (serverOpenedAt > 0) {
+      setLocalQuestionOpenedAt(serverOpenedAt);
+      return;
+    }
+
+    setLocalQuestionOpenedAt((current) => current ?? Date.now());
+  }, [gameState?.pendingQuestion, gameState?.pendingQuestionOpenedAt]);
+
+  useEffect(() => {
+    const hasTimedQuestion = Boolean(gameState?.pendingQuestion && gameState?.pendingQuestionOpenedAt);
+    const hasLocalTimedQuestion = Boolean(gameState?.pendingQuestion && localQuestionOpenedAt);
+    if (!hasTimedQuestion && !hasLocalTimedQuestion) {
+      return;
+    }
+
+    const intervalId = window.setInterval(() => {
+      setTimerNow(Date.now());
+    }, 250);
+
+    return () => {
+      window.clearInterval(intervalId);
+    };
+  }, [gameState?.pendingQuestion, gameState?.pendingQuestionOpenedAt, localQuestionOpenedAt]);
+
+  const questionTimeLeftSeconds = useMemo(() => {
+    if (!gameState?.pendingQuestion) {
+      return null;
+    }
+
+    const openedAt = Number(gameState.pendingQuestionOpenedAt || localQuestionOpenedAt || 0);
+    if (openedAt <= 0) {
+      return 45;
+    }
+
+    const msLeft = Math.max(0, openedAt + QUESTION_TIMEOUT_MS - timerNow);
+    return Math.ceil(msLeft / 1000);
+  }, [gameState?.pendingQuestion, gameState?.pendingQuestionOpenedAt, localQuestionOpenedAt, timerNow]);
 
   const runGameAction = async (path: string, body?: unknown) => {
     if (!sessionCode || isActionLoading) {
@@ -411,6 +463,39 @@ export default function GameBoardClient() {
   const canActThisTurn =
     Boolean(gameState?.viewerTeamId) && Boolean(currentTeam) && gameState?.viewerTeamId === currentTeam?.id;
 
+  useEffect(() => {
+    const pendingQuestion = gameState?.pendingQuestion ?? null;
+    if (!pendingQuestion) {
+      return;
+    }
+
+    if (questionTimeLeftSeconds === null || questionTimeLeftSeconds > 0) {
+      return;
+    }
+
+    if (qcmFeedback || isActionLoading || !canActThisTurn) {
+      return;
+    }
+
+    const timeoutKey = `${pendingQuestion.prompt}:${pendingQuestion.correctOptionIndex}`;
+    if (timeoutSubmitQuestionKeyRef.current === timeoutKey) {
+      return;
+    }
+    timeoutSubmitQuestionKeyRef.current = timeoutKey;
+
+    void runGameAction("/game/answer", {
+      selectedOptionIndex: -1,
+      actorPlayerId: playerId || undefined,
+    });
+  }, [
+    gameState?.pendingQuestion,
+    questionTimeLeftSeconds,
+    qcmFeedback,
+    isActionLoading,
+    canActThisTurn,
+    playerId,
+  ]);
+
   const actionLocked = busy || Boolean(qcmFeedback) || isDiceRolling;
 
   return (
@@ -475,6 +560,9 @@ export default function GameBoardClient() {
               <div className="ig-qcm-overlay" role="dialog" aria-modal="true" aria-label="Question popup">
                 <div className={`ig-qcm-card ${qcmFeedback ? (qcmFeedback.correct ? "qcm-correct" : "qcm-wrong") : ""}`}>
                   <p className="selection-label">QCM</p>
+                  {gameState?.pendingQuestion && !qcmFeedback && questionTimeLeftSeconds !== null && (
+                    <p className="selection-label ig-qcm-timer">Time left: {questionTimeLeftSeconds}s</p>
+                  )}
                   <p className="selection-value">{displayQuestion.prompt}</p>
                   <div className="ig-qcm-options">
                     {displayQuestion.options.map((option, optionIndex) => (
