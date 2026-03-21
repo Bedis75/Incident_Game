@@ -1225,6 +1225,40 @@ ol {
   line-height: 1.35;
 }
 
+.team-wedge-row {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  margin-top: 0.15rem;
+}
+
+.team-wedge-chip {
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: #ffffff;
+  font-size: 0.92rem;
+  font-weight: 800;
+  line-height: 1;
+  border: 1px solid #ffffff55;
+  box-shadow: 0 6px 16px #0000002e;
+}
+
+.team-wedge-red {
+  background: linear-gradient(180deg, #ff5a5a, #b62424);
+}
+
+.team-wedge-blue {
+  background: linear-gradient(180deg, #5a8dff, #2249b6);
+}
+
+.team-wedge-green {
+  background: linear-gradient(180deg, #54c66a, #23873e);
+}
+
 .team-lock-message {
   margin: 0.75rem 0 0;
   color: #bbb8ee;

@@ -561,9 +561,17 @@ export default function GameBoardClient() {
                   <span className={`team-color-dot ${TEAM_COLOR_CLASSES[index % TEAM_COLOR_CLASSES.length]}`} aria-hidden="true" />
                   <span>{team.name}</span>
                 </p>
-                <p className="selection-value compact">
-                  Red {team.wedges.red}/2 | Blue {team.wedges.blue}/2 | Green {team.wedges.green}/2
-                </p>
+                <div className="team-wedge-row" aria-label="Wedge progress">
+                  <span className="team-wedge-chip team-wedge-red" title={`Red wedges ${team.wedges.red} out of 2`}>
+                    {team.wedges.red}
+                  </span>
+                  <span className="team-wedge-chip team-wedge-blue" title={`Blue wedges ${team.wedges.blue} out of 2`}>
+                    {team.wedges.blue}
+                  </span>
+                  <span className="team-wedge-chip team-wedge-green" title={`Green wedges ${team.wedges.green} out of 2`}>
+                    {team.wedges.green}
+                  </span>
+                </div>
                 <p className="selection-value compact">Players {team.playerCount}</p>
                 <p className="selection-value compact">Position {team.position + 1} / 24</p>
               </div>
