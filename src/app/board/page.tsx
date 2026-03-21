@@ -10,9 +10,8 @@ type SpaceType = Category | "neutral";
 type TeamState = {
   id: string;
   name: string;
-  token: string;
-  colorClass: string;
   position: number;
+  playerCount: number;
   wedges: Record<Category, number>;
 };
 
@@ -23,16 +22,43 @@ type Question = {
   correctOptionIndex: number;
 };
 
-type TrapContext = "championship";
+type PendingTrap = {
+  context: "championship";
+  activity: string;
+};
 
-const CATEGORY_LABEL: Record<Category, string> = {
-  red: "Detection & Logging",
-  blue: "Triage & Diagnosis",
-  green: "Resolution & Closure",
+type AnswerReveal = {
+  question: Question;
+  selectedOptionIndex: number;
+  correct: boolean;
+  correctOptionIndex: number;
+  teamId: string;
+  teamName: string;
+  hideAt: number;
+};
+
+type GameState = {
+  teams: TeamState[];
+  currentTeamIndex: number;
+  lastRoll: number | null;
+  turnMessage: string;
+  pendingQuestion: Question | null;
+  answerReveal: AnswerReveal | null;
+  pendingNeutral: boolean;
+  pendingTrap: PendingTrap | null;
+  winnerId: string | null;
+  viewerTeamId: string | null;
+  viewerIsHost: boolean;
+  updatedAt: string;
+};
+
+type QcmFeedback = {
+  selectedOptionIndex: number;
+  correct: boolean;
+  correctOptionIndex: number;
 };
 
 const CATEGORY_KEYS: Category[] = ["red", "blue", "green"];
-
 const SPACES: SpaceType[] = Array.from({ length: 24 }, (_, index) => {
   const cycle = index % 4;
   if (cycle === 0) return "red";
@@ -41,117 +67,6 @@ const SPACES: SpaceType[] = Array.from({ length: 24 }, (_, index) => {
   return "neutral";
 });
 
-const QUESTION_DECK: Question[] = [
-  {
-    category: "red",
-    prompt: "What should happen first when an alert triggers?",
-    options: [
-      "Ignore it until users report impact",
-      "Log and create or update an incident ticket",
-      "Close monitoring to reduce noise",
-      "Jump directly to closure",
-    ],
-    correctOptionIndex: 1,
-  },
-  {
-    category: "red",
-    prompt: "Give one common source of incidents.",
-    options: [
-      "Monitoring alert or user report",
-      "Holiday calendar entry",
-      "Coffee machine notification",
-      "Office parking shortage",
-    ],
-    correctOptionIndex: 0,
-  },
-  {
-    category: "red",
-    prompt: "What is the purpose of incident classification?",
-    options: [
-      "To make incident tickets longer",
-      "To route and prioritize incidents correctly",
-      "To remove SLA commitments",
-      "To skip communication",
-    ],
-    correctOptionIndex: 1,
-  },
-  {
-    category: "blue",
-    prompt: "What two factors determine incident priority?",
-    options: [
-      "Age and team size",
-      "Impact and urgency",
-      "Shift timing and weather",
-      "Budget and hardware brand",
-    ],
-    correctOptionIndex: 1,
-  },
-  {
-    category: "blue",
-    prompt: "When should an incident be escalated?",
-    options: [
-      "Only after closure",
-      "When SLA risk is high or expertise is missing",
-      "Never",
-      "Only if no ticket exists",
-    ],
-    correctOptionIndex: 1,
-  },
-  {
-    category: "blue",
-    prompt: "Why communicate during triage?",
-    options: [
-      "To create extra approvals",
-      "To align responders and keep stakeholders informed",
-      "To delay recovery",
-      "To hide incident impact",
-    ],
-    correctOptionIndex: 1,
-  },
-  {
-    category: "green",
-    prompt: "What is a workaround in incident management?",
-    options: [
-      "A final permanent fix",
-      "A temporary action to restore service quickly",
-      "A postmortem template",
-      "A tool for deleting logs",
-    ],
-    correctOptionIndex: 1,
-  },
-  {
-    category: "green",
-    prompt: "What should be verified before closure?",
-    options: [
-      "Service restored, fix validated, and users confirmed",
-      "Only ticket title updated",
-      "Only manager informed",
-      "No verification needed",
-    ],
-    correctOptionIndex: 0,
-  },
-  {
-    category: "green",
-    prompt: "Why capture lessons learned?",
-    options: [
-      "To prevent recurrence and improve response process",
-      "To reduce monitoring visibility",
-      "To avoid documenting root causes",
-      "To skip closure checks",
-    ],
-    correctOptionIndex: 0,
-  },
-];
-
-const TRAP_ACTIVITIES = [
-  "Name 3 actions to stabilize an incident in 20 seconds.",
-  "Give one escalation reason and one communication channel.",
-  "State a quick workaround and one verification step.",
-  "List impact, urgency, and one SLA-related action.",
-  "Name one likely root cause and one containment action.",
-  "Give a closure check and one lesson learned item.",
-];
-
 const categoryClass: Record<SpaceType, string> = {
   red: "ig-red",
   blue: "ig-blue",
@@ -159,13 +74,12 @@ const categoryClass: Record<SpaceType, string> = {
   neutral: "ig-neutral",
 };
 
-function hasAllWedges(team: TeamState) {
-  return team.wedges.red >= 2 && team.wedges.blue >= 2 && team.wedges.green >= 2;
-}
-
-function randomFrom<T>(list: T[]) {
-  return list[Math.floor(Math.random() * list.length)];
-}
+const TEAM_COLOR_CLASSES = [
+  "team-color-yellow",
+  "team-color-cyan",
+  "team-color-pink",
+  "team-color-green",
+];
 
 function getPipPattern(face: number): number[] {
   if (face === 1) return [4];
@@ -176,78 +90,46 @@ function getPipPattern(face: number): number[] {
   return [0, 2, 3, 5, 6, 8];
 }
 
-type PinMarker = {
-  team: TeamState;
-  stackClass: string;
-  layerClass: string;
-};
-
-type QcmFeedback = {
-  selectedOptionIndex: number;
-  correct: boolean;
-};
+function hasAllWedges(team: TeamState | null) {
+  if (!team) return false;
+  return team.wedges.red >= 2 && team.wedges.blue >= 2 && team.wedges.green >= 2;
+}
 
 export default function GameBoardPage() {
   const searchParams = useSearchParams();
-  const username = searchParams.get("username")?.trim() || "Player";
-  const sessionCode = searchParams.get("sessionCode")?.trim() || "AUTO-SESSION";
-  const initialTeams = useMemo<TeamState[]>(
-    () => [
-      {
-        id: "team-1",
-        name: `${username} Team`,
-        token: "Y",
-        colorClass: "team-color-yellow",
-        position: 0,
-        wedges: { red: 0, blue: 0, green: 0 },
-      },
-      {
-        id: "team-2",
-        name: "Alpha Team",
-        token: "A",
-        colorClass: "team-color-cyan",
-        position: 0,
-        wedges: { red: 0, blue: 0, green: 0 },
-      },
-      {
-        id: "team-3",
-        name: "Bravo Team",
-        token: "B",
-        colorClass: "team-color-pink",
-        position: 0,
-        wedges: { red: 0, blue: 0, green: 0 },
-      },
-      {
-        id: "team-4",
-        name: "Charlie Team",
-        token: "C",
-        colorClass: "team-color-green",
-        position: 0,
-        wedges: { red: 0, blue: 0, green: 0 },
-      },
-    ],
-    [username],
-  );
+  const username = searchParams.get("username")?.trim() || "";
+  const sessionCode = searchParams.get("sessionCode")?.trim() || "";
+  const playerId = searchParams.get("playerId")?.trim() || "";
+  const apiBaseUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:3001";
 
-  const [teams, setTeams] = useState<TeamState[]>(initialTeams);
-  const [currentTeamIndex, setCurrentTeamIndex] = useState(0);
-  const [lastRoll, setLastRoll] = useState<number | null>(null);
-  const [turnMessage, setTurnMessage] = useState(
-    "Roll d6 and move clockwise. Red/Blue/Green: answer QCM. Neutral: roll again or move +1.",
-  );
-  const [pendingQuestion, setPendingQuestion] = useState<Question | null>(null);
-  const [pendingTrapActivity, setPendingTrapActivity] = useState<string | null>(null);
-  const [pendingTrapContext, setPendingTrapContext] = useState<TrapContext | null>(null);
-  const [pendingNeutral, setPendingNeutral] = useState(false);
-  const [winnerId, setWinnerId] = useState<string | null>(null);
+  const [gameState, setGameState] = useState<GameState | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const [statusMessage, setStatusMessage] = useState("");
+  const [isActionLoading, setIsActionLoading] = useState(false);
+  const [qcmFeedback, setQcmFeedback] = useState<QcmFeedback | null>(null);
+  const [displayQuestion, setDisplayQuestion] = useState<Question | null>(null);
+  const [isQcmVisible, setIsQcmVisible] = useState(false);
   const [rollingFace, setRollingFace] = useState(1);
   const [isDiceRolling, setIsDiceRolling] = useState(false);
-  const [qcmFeedback, setQcmFeedback] = useState<QcmFeedback | null>(null);
-  const [isQcmVisible, setIsQcmVisible] = useState(false);
+  const [frozenTeams, setFrozenTeams] = useState<TeamState[] | null>(null);
+
+  const previousGameStateRef = useRef<GameState | null>(null);
+  const previousRollRef = useRef<number | null>(null);
+  const questionKeyRef = useRef("");
   const qcmShowTimeoutRef = useRef<number | null>(null);
   const qcmHideTimeoutRef = useRef<number | null>(null);
 
-  const currentTeam = teams[currentTeamIndex];
+  const currentTeam =
+    gameState && gameState.teams.length > 0
+      ? gameState.teams[gameState.currentTeamIndex] || null
+      : null;
+
+  const winner = gameState?.winnerId
+    ? gameState.teams.find((team) => team.id === gameState.winnerId) || null
+    : null;
+
+  const diceFace = isDiceRolling ? rollingFace : gameState?.lastRoll ?? rollingFace;
+  const pipPattern = getPipPattern(diceFace);
 
   const clearQcmTimers = () => {
     if (qcmShowTimeoutRef.current !== null) {
@@ -261,17 +143,55 @@ export default function GameBoardPage() {
     }
   };
 
-  const advanceTurn = () => {
-    clearQcmTimers();
-    setPendingQuestion(null);
-    setQcmFeedback(null);
-    setIsQcmVisible(false);
-    setPendingNeutral(false);
-    setPendingTrapActivity(null);
-    setPendingTrapContext(null);
-    setLastRoll(null);
-    setCurrentTeamIndex((previous) => (previous + 1) % teams.length);
+  const syncGameState = async () => {
+    if (!sessionCode) {
+      return;
+    }
+
+    const response = await fetch(
+      `${apiBaseUrl}/api/sessions/${sessionCode}/game-state?playerId=${encodeURIComponent(playerId)}`,
+    );
+    const payload = await response.json();
+
+    if (!response.ok) {
+      throw new Error(payload?.error || "Could not load game state.");
+    }
+
+    setGameState(payload.gameState);
   };
+
+  useEffect(() => {
+    if (!sessionCode) {
+      setStatusMessage("Missing session code. Return to menu and join a valid session.");
+      setIsLoading(false);
+      return;
+    }
+
+    let isCancelled = false;
+
+    const poll = async () => {
+      try {
+        await syncGameState();
+        if (!isCancelled) {
+          setStatusMessage("");
+          setIsLoading(false);
+        }
+      } catch (error) {
+        if (!isCancelled) {
+          setStatusMessage(error instanceof Error ? error.message : "Could not sync game state.");
+          setIsLoading(false);
+        }
+      }
+    };
+
+    void poll();
+    const intervalId = window.setInterval(poll, 1000);
+
+    return () => {
+      isCancelled = true;
+      window.clearInterval(intervalId);
+    };
+  }, [apiBaseUrl, sessionCode]);
 
   useEffect(() => {
     return () => {
@@ -279,182 +199,198 @@ export default function GameBoardPage() {
     };
   }, []);
 
-  const moveAndResolve = (steps: number) => {
-    const newTeams = teams.map((team, index) => {
-      if (index !== currentTeamIndex) return team;
-      return {
-        ...team,
-        position: (team.position + steps) % SPACES.length,
-      };
-    });
+  useEffect(() => {
+    const lastRoll = gameState?.lastRoll ?? null;
 
-    setTeams(newTeams);
-    const activeTeam = newTeams[currentTeamIndex];
-    const landed = SPACES[activeTeam.position];
-
-    if (landed === "neutral") {
-      setPendingNeutral(true);
-      setTurnMessage(`${activeTeam.name} landed on Neutral. Choose roll again or move +1.`);
+    if (lastRoll === null || previousRollRef.current === lastRoll) {
+      previousGameStateRef.current = gameState;
       return;
     }
 
-    const categoryDeck = QUESTION_DECK.filter((q) => q.category === landed);
-    const chosen = randomFrom(categoryDeck);
+    const previousTeams = previousGameStateRef.current?.teams || null;
+    setFrozenTeams(previousTeams);
+    previousRollRef.current = lastRoll;
+    setIsDiceRolling(true);
+    let ticks = 0;
+    const totalTicks = 12;
+
+    const intervalId = window.setInterval(() => {
+      setRollingFace(Math.floor(Math.random() * 6) + 1);
+      ticks += 1;
+
+      if (ticks < totalTicks) {
+        return;
+      }
+
+      window.clearInterval(intervalId);
+      setRollingFace(lastRoll);
+      setIsDiceRolling(false);
+      setFrozenTeams(null);
+    }, 85);
+
+    return () => {
+      window.clearInterval(intervalId);
+    };
+  }, [gameState?.lastRoll]);
+
+  useEffect(() => {
+    previousGameStateRef.current = gameState;
+  }, [gameState]);
+
+  useEffect(() => {
+    const answerReveal = gameState?.answerReveal ?? null;
+    if (!answerReveal) {
+      setQcmFeedback(null);
+      setDisplayQuestion(null);
+      setIsQcmVisible(false);
+      return;
+    }
+
     clearQcmTimers();
-    setPendingQuestion(chosen);
-    setQcmFeedback(null);
+    setDisplayQuestion(answerReveal.question);
+    setQcmFeedback({
+      selectedOptionIndex: answerReveal.selectedOptionIndex,
+      correct: answerReveal.correct,
+      correctOptionIndex: answerReveal.correctOptionIndex,
+    });
+    setIsQcmVisible(true);
+
+    const msUntilHide = Math.max(0, Number(answerReveal.hideAt || 0) - Date.now());
+    qcmHideTimeoutRef.current = window.setTimeout(() => {
+      setQcmFeedback(null);
+      setDisplayQuestion(null);
+      setIsQcmVisible(false);
+    }, msUntilHide);
+  }, [gameState?.answerReveal]);
+
+  useEffect(() => {
+    const pendingQuestion = gameState?.pendingQuestion ?? null;
+    const answerReveal = gameState?.answerReveal ?? null;
+
+    if (answerReveal) {
+      return;
+    }
+
+    if (isDiceRolling) {
+      return;
+    }
+
+    if (!pendingQuestion) {
+      if (!qcmFeedback) {
+        setIsQcmVisible(false);
+        setDisplayQuestion(null);
+      }
+      return;
+    }
+
+    const questionKey = `${pendingQuestion.prompt}:${pendingQuestion.correctOptionIndex}`;
+    if (questionKeyRef.current === questionKey) {
+      return;
+    }
+
+    questionKeyRef.current = questionKey;
+    clearQcmTimers();
+    setDisplayQuestion(pendingQuestion);
     setIsQcmVisible(false);
 
     qcmShowTimeoutRef.current = window.setTimeout(() => {
       setIsQcmVisible(true);
     }, 2000);
+  }, [gameState?.pendingQuestion, gameState?.answerReveal, isDiceRolling, qcmFeedback]);
 
-    setTurnMessage(`${activeTeam.name} landed on ${CATEGORY_LABEL[landed]}. Answer to earn a wedge.`);
-  };
+  const runGameAction = async (path: string, body?: unknown) => {
+    if (!sessionCode || isActionLoading) {
+      return;
+    }
 
-  const animateDiceRoll = () => {
-    return new Promise<number>((resolve) => {
-      setIsDiceRolling(true);
-      let ticks = 0;
-      const totalTicks = 12;
+    setIsActionLoading(true);
+    setStatusMessage("");
 
-      const intervalId = window.setInterval(() => {
-        const face = Math.floor(Math.random() * 6) + 1;
-        setRollingFace(face);
-        ticks += 1;
+    try {
+      const response = await fetch(`${apiBaseUrl}/api/sessions/${sessionCode}${path}`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: body ? JSON.stringify(body) : undefined,
+      });
 
-        if (ticks < totalTicks) {
-          return;
+      const payload = await response.json();
+
+      if (!response.ok) {
+        setStatusMessage(payload?.error || "Game action failed.");
+        if (payload?.gameState) {
+          setGameState(payload.gameState);
         }
+        return;
+      }
 
-        window.clearInterval(intervalId);
-        const finalFace = Math.floor(Math.random() * 6) + 1;
-        setRollingFace(finalFace);
-        setLastRoll(finalFace);
-        setIsDiceRolling(false);
-        resolve(finalFace);
-      }, 85);
-    });
+      if (payload?.gameState) {
+        setGameState(payload.gameState);
+      }
+
+      return payload;
+    } catch {
+      setStatusMessage("Could not reach API. Start incident_game_api first.");
+      return undefined;
+    } finally {
+      setIsActionLoading(false);
+    }
   };
 
   const onRollDice = async () => {
-    if (
-      winnerId ||
-      pendingQuestion ||
-      pendingNeutral ||
-      pendingTrapActivity ||
-      pendingTrapContext ||
-      isDiceRolling
-    ) return;
-    const roll = await animateDiceRoll();
-    moveAndResolve(roll);
+    setQcmFeedback(null);
+    await runGameAction("/game/roll", { actorPlayerId: playerId || undefined });
   };
 
   const onNeutralChoice = async (choice: "roll" | "plus") => {
-    setPendingNeutral(false);
-    if (choice === "roll") {
-      if (isDiceRolling) return;
-      const roll = await animateDiceRoll();
-      moveAndResolve(roll);
-      return;
-    }
-
-    setLastRoll(1);
-    setRollingFace(1);
-    moveAndResolve(1);
+    setQcmFeedback(null);
+    await runGameAction("/game/neutral", {
+      choice,
+      actorPlayerId: playerId || undefined,
+    });
   };
 
-  const onQuestionOptionSelect = (selectedOptionIndex: number) => {
-    if (!pendingQuestion || qcmFeedback || !isQcmVisible) return;
-    clearQcmTimers();
-    const correct = selectedOptionIndex === pendingQuestion.correctOptionIndex;
-    setQcmFeedback({ selectedOptionIndex, correct });
+  const onQuestionOptionSelect = async (selectedOptionIndex: number) => {
+    if (!displayQuestion || qcmFeedback || isActionLoading) return;
+    if (!canActThisTurn) return;
 
-    const category = pendingQuestion.category;
-    if (correct) {
-      setTeams((previous) =>
-        previous.map((team, index) => {
-          if (index !== currentTeamIndex) return team;
-          if (team.wedges[category] >= 2) {
-            return team;
-          }
-
-          return {
-            ...team,
-            wedges: {
-              ...team.wedges,
-              [category]: team.wedges[category] + 1,
-            },
-          };
-        }),
-      );
-
-      setTurnMessage(
-        `${currentTeam.name} answered correctly. ${CATEGORY_LABEL[category]} wedge awarded (max 2).`,
-      );
-    } else {
-      setTurnMessage(`${currentTeam.name} answered wrong. Turn ends.`);
-    }
-
-    qcmHideTimeoutRef.current = window.setTimeout(() => {
-      advanceTurn();
-    }, 3000);
+    await runGameAction("/game/answer", {
+      selectedOptionIndex,
+      actorPlayerId: playerId || undefined,
+    });
   };
 
-  const onAttemptChampionship = () => {
-    if (winnerId || pendingQuestion || pendingNeutral || pendingTrapActivity || pendingTrapContext || isDiceRolling) return;
-    if (!hasAllWedges(currentTeam)) return;
-    setPendingTrapContext("championship");
-    setPendingTrapActivity(randomFrom(TRAP_ACTIVITIES));
-    setTurnMessage("Championship trap activity: succeed to win, fail and lose one wedge.");
+  const onAttemptChampionship = async () => {
+    await runGameAction("/game/trap-attempt", {
+      actorPlayerId: playerId || undefined,
+    });
   };
 
-  const onTrapResult = (success: boolean) => {
-    if (!pendingTrapContext || !pendingTrapActivity) return;
-
-    if (success) {
-      setWinnerId(currentTeam.id);
-      setPendingTrapActivity(null);
-      setPendingTrapContext(null);
-      setTurnMessage(`${currentTeam.name} succeeded in the championship trap and is crowned Incident Management Champion.`);
-      return;
-    }
-
-    setTeams((previous) =>
-      previous.map((team, index) => {
-        if (index !== currentTeamIndex) return team;
-        const available: Category[] = CATEGORY_KEYS.filter((category) => team.wedges[category] > 0);
-
-        if (available.length === 0) return team;
-        const removeFrom = randomFrom(available);
-        return {
-          ...team,
-          wedges: {
-            ...team.wedges,
-            [removeFrom]: team.wedges[removeFrom] - 1,
-          },
-        };
-      }),
-    );
-
-    setTurnMessage(`${currentTeam.name} failed the championship trap and lost one wedge.`);
-    advanceTurn();
+  const onTrapResult = async (success: boolean) => {
+    await runGameAction("/game/trap-result", {
+      success,
+      actorPlayerId: playerId || undefined,
+    });
   };
 
-  const winner = winnerId ? teams.find((team) => team.id === winnerId) : null;
-  const diceFace = lastRoll ?? rollingFace;
-  const pipPattern = getPipPattern(diceFace);
+  const teamsForRender =
+    isDiceRolling && frozenTeams
+      ? frozenTeams
+      : gameState?.teams || [];
 
-  const pinMarkers = useMemo<PinMarker[]>(() => {
+  const pinMarkers = useMemo(() => {
+    if (teamsForRender.length === 0) return [];
+
     const teamsByPosition = new Map<number, TeamState[]>();
 
-    for (const team of teams) {
+    for (const team of teamsForRender) {
       const bucket = teamsByPosition.get(team.position) ?? [];
       bucket.push(team);
       teamsByPosition.set(team.position, bucket);
     }
 
-    return teams.map((team) => {
+    return teamsForRender.map((team) => {
       const bucket = teamsByPosition.get(team.position) ?? [team];
       const indexInBucket = bucket.findIndex((item) => item.id === team.id);
       return {
@@ -463,7 +399,22 @@ export default function GameBoardPage() {
         layerClass: `pin-layer-${indexInBucket}`,
       };
     });
-  }, [teams]);
+  }, [teamsForRender]);
+
+  const busy =
+    isActionLoading ||
+    !gameState ||
+    isLoading;
+
+  const canActThisTurn =
+    Boolean(gameState?.viewerTeamId) &&
+    Boolean(currentTeam) &&
+    gameState?.viewerTeamId === currentTeam?.id;
+
+  const actionLocked =
+    busy ||
+    Boolean(qcmFeedback) ||
+    isDiceRolling;
 
   return (
     <div className="page-shell board-shell">
@@ -474,7 +425,7 @@ export default function GameBoardPage() {
             <h1 className="board-title">Incident Management Champion Board</h1>
           </div>
           <div className="board-top-actions">
-            <p className="board-energy">Session {sessionCode}</p>
+            <p className="board-energy">Session {sessionCode || "-"}</p>
             <Link href="/" className="board-home-btn" aria-label="Quit to main menu">
               Quit
             </Link>
@@ -484,15 +435,15 @@ export default function GameBoardPage() {
         <section className="board-meta board-meta-modern" aria-label="Board details">
           <article className="board-chip">
             <strong>Active Team</strong>
-            <span>{currentTeam.name}</span>
+            <span>{currentTeam?.name || "-"}</span>
           </article>
           <article className="board-chip">
             <strong>Last Roll</strong>
-            <span>{lastRoll ?? "-"}</span>
+            <span>{gameState?.lastRoll ?? "-"}</span>
           </article>
           <article className="board-chip">
             <strong>Status</strong>
-            <span>{winner ? "Champion crowned" : "In progress"}</span>
+            <span>{isLoading ? "Loading" : winner ? "Champion crowned" : "In progress"}</span>
           </article>
         </section>
 
@@ -511,30 +462,30 @@ export default function GameBoardPage() {
                   <small className="ig-space-label">{space === "neutral" ? "N" : space.toUpperCase()}</small>
                 </div>
               ))}
-              {pinMarkers.map(({ team, stackClass, layerClass }) => (
+              {pinMarkers.map(({ team, stackClass, layerClass }, teamIndex) => (
                 <div
                   key={`${team.id}-pin`}
                   className={`ig-board-pin-wrap ig-pos-${team.position} ${stackClass} ${layerClass}`}
                   aria-label={`${team.name} position marker`}
                 >
-                  <span className={`ig-token-pin ${team.colorClass}`}>
+                  <span className={`ig-token-pin ${TEAM_COLOR_CLASSES[teamIndex % TEAM_COLOR_CLASSES.length]}`}>
                     <span className="ig-token-core" aria-hidden="true" />
                   </span>
                 </div>
               ))}
               <div className="ig-center">Resolution Center</div>
             </div>
-            <p className="ig-message">{turnMessage}</p>
+            <p className="ig-message">{statusMessage || gameState?.turnMessage || "-"}</p>
 
-            {pendingQuestion && isQcmVisible && (
+            {displayQuestion && isQcmVisible && (
               <div className="ig-qcm-overlay" role="dialog" aria-modal="true" aria-label="Question popup">
                 <div className={`ig-qcm-card ${qcmFeedback ? (qcmFeedback.correct ? "qcm-correct" : "qcm-wrong") : ""}`}>
-                  <p className="selection-label">QCM ({CATEGORY_LABEL[pendingQuestion.category]})</p>
-                  <p className="selection-value">{pendingQuestion.prompt}</p>
+                  <p className="selection-label">QCM</p>
+                  <p className="selection-value">{displayQuestion.prompt}</p>
                   <div className="ig-qcm-options">
-                    {pendingQuestion.options.map((option, optionIndex) => (
+                    {displayQuestion.options.map((option, optionIndex) => (
                       <button
-                        key={`${pendingQuestion.prompt}-${optionIndex}`}
+                        key={`${displayQuestion.prompt}-${optionIndex}`}
                         type="button"
                         className={`ig-qcm-option ${
                           qcmFeedback
@@ -542,13 +493,13 @@ export default function GameBoardPage() {
                               ? qcmFeedback.correct
                                 ? "qcm-answer-correct"
                                 : "qcm-answer-wrong"
-                              : optionIndex === pendingQuestion.correctOptionIndex
+                              : optionIndex === qcmFeedback.correctOptionIndex
                                 ? "qcm-answer-correct-ghost"
                                 : "qcm-answer-dim"
                             : ""
                         }`}
                         onClick={() => onQuestionOptionSelect(optionIndex)}
-                        disabled={Boolean(qcmFeedback)}
+                        disabled={busy || isDiceRolling || !canActThisTurn || Boolean(qcmFeedback)}
                       >
                         {String.fromCharCode(65 + optionIndex)}. {option}
                       </button>
@@ -558,7 +509,7 @@ export default function GameBoardPage() {
               </div>
             )}
 
-            {pendingNeutral && (
+            {gameState?.pendingNeutral && (
               <div className="ig-question-box">
                 <p className="selection-value">Neutral space action</p>
                 <div className="ig-actions-row">
@@ -566,7 +517,7 @@ export default function GameBoardPage() {
                     type="button"
                     className="board-start-btn"
                     onClick={() => onNeutralChoice("roll")}
-                    disabled={isDiceRolling}
+                    disabled={actionLocked || !canActThisTurn}
                   >
                     Roll Again
                   </button>
@@ -574,6 +525,7 @@ export default function GameBoardPage() {
                     type="button"
                     className="board-start-btn host-start-game-btn"
                     onClick={() => onNeutralChoice("plus")}
+                    disabled={actionLocked || !canActThisTurn}
                   >
                     Move +1
                   </button>
@@ -581,20 +533,19 @@ export default function GameBoardPage() {
               </div>
             )}
 
-            {pendingTrapActivity && pendingTrapContext && (
+            {gameState?.pendingTrap && (
               <div className="ig-question-box">
-                <p className="selection-label">
-                  {pendingTrapContext === "championship" ? "Championship trap" : "Blue trap activity"}
-                </p>
-                <p className="selection-value">{pendingTrapActivity}</p>
+                <p className="selection-label">Championship trap</p>
+                <p className="selection-value">{gameState.pendingTrap.activity}</p>
                 <div className="ig-actions-row">
-                  <button type="button" className="board-start-btn" onClick={() => onTrapResult(true)}>
+                  <button type="button" className="board-start-btn" onClick={() => onTrapResult(true)} disabled={actionLocked || !canActThisTurn}>
                     Success
                   </button>
                   <button
                     type="button"
                     className="board-start-btn host-start-game-btn"
                     onClick={() => onTrapResult(false)}
+                    disabled={actionLocked || !canActThisTurn}
                   >
                     Failure
                   </button>
@@ -605,15 +556,16 @@ export default function GameBoardPage() {
 
           <article className="board-panel board-side-panel">
             <h2>Match Panel</h2>
-            {teams.map((team, index) => (
-              <div key={team.id} className={`selection-card ${index === currentTeamIndex ? "ig-active-team" : ""}`}>
+            {(gameState?.teams || []).map((team, index) => (
+              <div key={team.id} className={`selection-card ${index === gameState?.currentTeamIndex ? "ig-active-team" : ""}`}>
                 <p className="selection-value team-name-row">
-                  <span className={`team-color-dot ${team.colorClass}`} aria-hidden="true" />
+                  <span className={`team-color-dot ${TEAM_COLOR_CLASSES[index % TEAM_COLOR_CLASSES.length]}`} aria-hidden="true" />
                   <span>{team.name}</span>
                 </p>
                 <p className="selection-value compact">
                   Red {team.wedges.red}/2 | Blue {team.wedges.blue}/2 | Green {team.wedges.green}/2
                 </p>
+                <p className="selection-value compact">Players {team.playerCount}</p>
                 <p className="selection-value compact">Position {team.position + 1} / 24</p>
               </div>
             ))}
@@ -623,22 +575,19 @@ export default function GameBoardPage() {
               className="board-start-btn"
               onClick={onRollDice}
               disabled={
+                actionLocked ||
+                !canActThisTurn ||
                 Boolean(winner) ||
-                Boolean(pendingQuestion) ||
-                pendingNeutral ||
-                Boolean(pendingTrapActivity) ||
-                Boolean(pendingTrapContext) ||
-                isDiceRolling
+                Boolean(gameState?.pendingQuestion) ||
+                Boolean(gameState?.answerReveal) ||
+                Boolean(gameState?.pendingNeutral) ||
+                Boolean(gameState?.pendingTrap)
               }
             >
               Roll Dice
             </button>
 
-            <div
-              className={`board-dice-widget ${isDiceRolling ? "rolling" : ""}`}
-              aria-live="polite"
-              aria-label="Dice animation"
-            >
+            <div className={`board-dice-widget ${isDiceRolling ? "rolling" : ""}`} aria-live="polite" aria-label="Dice animation">
               <div className="board-dice-face" role="img" aria-label={`Dice face ${diceFace}`}>
                 {Array.from({ length: 9 }, (_, index) => (
                   <span
@@ -648,9 +597,7 @@ export default function GameBoardPage() {
                   />
                 ))}
               </div>
-              <p className="board-dice-label">
-                {isDiceRolling ? "Rolling..." : `Dice face: ${diceFace}`}
-              </p>
+              <p className="board-dice-label">{isDiceRolling ? "Rolling..." : `Dice face: ${diceFace}`}</p>
             </div>
 
             <button
@@ -658,13 +605,14 @@ export default function GameBoardPage() {
               className="board-start-btn host-start-game-btn"
               onClick={onAttemptChampionship}
               disabled={
+                actionLocked ||
+                !canActThisTurn ||
                 Boolean(winner) ||
                 !hasAllWedges(currentTeam) ||
-                Boolean(pendingQuestion) ||
-                pendingNeutral ||
-                Boolean(pendingTrapActivity) ||
-                Boolean(pendingTrapContext) ||
-                isDiceRolling
+                Boolean(gameState?.pendingQuestion) ||
+                Boolean(gameState?.answerReveal) ||
+                Boolean(gameState?.pendingNeutral) ||
+                Boolean(gameState?.pendingTrap)
               }
             >
               Attempt Championship Trap
@@ -677,6 +625,12 @@ export default function GameBoardPage() {
                 <p className="selection-value compact">Incident Management Champion crowned.</p>
               </div>
             )}
+
+            <p className="selection-value compact">Player: {username || "-"}</p>
+            <p className="selection-value compact">
+              {canActThisTurn ? "Your team turn" : "Waiting for active team"}
+            </p>
+            <p className="selection-value compact">Session sync at 1s interval</p>
           </article>
         </section>
       </main>

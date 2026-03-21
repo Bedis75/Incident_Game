@@ -3,34 +3,26 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useSearchParams } from "next/navigation";
-import { useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-const TEAM_OPTIONS = [
-  {
-    id: "team-alpha",
-    name: "Team Alpha",
-    players: ["Nora", "Ibrahim", "Lea"],
-    colorClass: "team-card-red",
-  },
-  {
-    id: "team-bravo",
-    name: "Team Bravo",
-    players: ["Mateo", "Chen", "Sana"],
-    colorClass: "team-card-blue",
-  },
-  {
-    id: "team-charlie",
-    name: "Team Charlie",
-    players: ["Ava", "Rami", "Noah"],
-    colorClass: "team-card-green",
-  },
-  {
-    id: "team-delta",
-    name: "Team Delta",
-    players: ["Zoe", "Karim", "Mina"],
-    colorClass: "team-card-violet",
-  },
-];
+type SessionPlayer = {
+  id: string;
+  username: string;
+  isHost: boolean;
+  teamId: string | null;
+};
+
+type SessionTeam = {
+  id: string;
+  name: string;
+  playerIds: string[];
+};
+
+type HostTeamDraft = {
+  id: string;
+  name: string;
+  colorClass: string;
+};
 
 const TEAM_COLOR_CLASSES = [
   "team-card-red",
@@ -39,45 +31,103 @@ const TEAM_COLOR_CLASSES = [
   "team-card-violet",
 ];
 
-export default function BoardPage() {
+export default function TeamChoosingPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const username = searchParams.get("username")?.trim() || "Player";
+  const username = searchParams.get("username")?.trim() || "";
   const mode = searchParams.get("mode") === "create" ? "create" : "join";
-  const sessionCode = searchParams.get("sessionCode")?.trim() || "AUTO-SESSION";
-  const [selectedTeam, setSelectedTeam] = useState<string>(TEAM_OPTIONS[0].id);
+  const sessionCode = searchParams.get("sessionCode")?.trim() || "";
+  const playerId = searchParams.get("playerId")?.trim() || "";
+  const hostPlayerIdFromParams = searchParams.get("hostPlayerId")?.trim() || "";
+  const apiBaseUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:3001";
+
+  const [selectedTeam, setSelectedTeam] = useState<string>("");
   const [isLocked, setIsLocked] = useState(false);
   const [isTeamsSaved, setIsTeamsSaved] = useState(false);
   const [hasGameStarted, setHasGameStarted] = useState(false);
-  const [nextTeamNumber, setNextTeamNumber] = useState(TEAM_OPTIONS.length + 1);
-  const [hostTeams, setHostTeams] = useState(
-    TEAM_OPTIONS.map((team) => ({
-      id: team.id,
-      name: team.name,
-      playersText: team.players.join(", "),
-      colorClass: team.colorClass,
-    })),
+  const [isStartingGame, setIsStartingGame] = useState(false);
+  const [statusMessage, setStatusMessage] = useState("");
+  const [sessionHostPlayerId, setSessionHostPlayerId] = useState(hostPlayerIdFromParams);
+  const [sessionPlayers, setSessionPlayers] = useState<SessionPlayer[]>([]);
+  const [sessionTeams, setSessionTeams] = useState<SessionTeam[]>([]);
+  const [hostTeams, setHostTeams] = useState<HostTeamDraft[]>([
+    {
+      id: "team-custom-1",
+      name: "",
+      colorClass: TEAM_COLOR_CLASSES[0],
+    },
+    {
+      id: "team-custom-2",
+      name: "",
+      colorClass: TEAM_COLOR_CLASSES[1],
+    },
+  ]);
+
+  const startedRedirectRef = useRef(false);
+  const didHydrateHostTeamsRef = useRef(false);
+
+  const isHost = Boolean(sessionHostPlayerId && playerId && sessionHostPlayerId === playerId);
+
+  const selectedTeamInfo = useMemo(
+    () => sessionTeams.find((team) => team.id === selectedTeam),
+    [selectedTeam, sessionTeams],
   );
 
-  const selectedTeamInfo = TEAM_OPTIONS.find((team) => team.id === selectedTeam);
-  const selectedTeamPlayers = selectedTeamInfo?.players ?? [];
+  const selectedTeamPlayers = useMemo(
+    () =>
+      sessionPlayers
+        .filter((player) => player.teamId === selectedTeam)
+        .map((player) => player.username),
+    [selectedTeam, sessionPlayers],
+  );
 
-  const sessionPlayers = useMemo(() => {
-    const fromTeams =
-      mode === "create"
-        ? hostTeams
-            .flatMap((team) => team.playersText.split(","))
-            .map((name) => name.trim())
-            .filter(Boolean)
-        : TEAM_OPTIONS.flatMap((team) => team.players);
+  const fetchSession = useCallback(async () => {
+    if (!sessionCode) {
+      return;
+    }
 
-    const merged = [username, ...fromTeams];
-    return Array.from(new Set(merged));
-  }, [hostTeams, mode, username]);
+    const response = await fetch(`${apiBaseUrl}/api/sessions/${sessionCode}`);
+    const payload = await response.json();
+
+    if (!response.ok) {
+      throw new Error(payload?.error || "Could not fetch session.");
+    }
+
+    const hostId = payload.session.hostPlayerId || "";
+    const players = Array.isArray(payload.session.players) ? payload.session.players : [];
+    const teams = Array.isArray(payload.session.teams) ? payload.session.teams : [];
+
+    setSessionHostPlayerId(hostId);
+    setSessionPlayers(players);
+    setSessionTeams(teams);
+    setIsTeamsSaved(teams.length > 0);
+
+    if (!selectedTeam && teams.length > 0) {
+      setSelectedTeam(teams[0].id);
+    }
+
+    if (!didHydrateHostTeamsRef.current && teams.length > 0) {
+      setHostTeams(
+        teams.map((team: SessionTeam, index: number) => ({
+          id: team.id,
+          name: team.name,
+          colorClass: TEAM_COLOR_CLASSES[index % TEAM_COLOR_CLASSES.length],
+        })),
+      );
+      didHydrateHostTeamsRef.current = true;
+    }
+
+    if (payload.session.status === "in-game" && !startedRedirectRef.current) {
+      startedRedirectRef.current = true;
+      setHasGameStarted(true);
+      const params = new URLSearchParams({ username, sessionCode, playerId });
+      router.push(`/board?${params.toString()}`);
+    }
+  }, [apiBaseUrl, playerId, router, selectedTeam, sessionCode, username]);
 
   const updateHostTeam = (
     teamId: string,
-    field: "name" | "playersText",
+    field: "name",
     value: string,
   ) => {
     setHostTeams((previous) =>
@@ -100,25 +150,179 @@ export default function BoardPage() {
         ...previous,
         {
           id: `team-custom-${Date.now()}`,
-          name: `Team ${nextTeamNumber}`,
-          playersText: "",
+          name: "",
           colorClass,
         },
       ];
     });
-    setNextTeamNumber((value) => value + 1);
     setIsTeamsSaved(false);
   };
+
+  const getPlayerNamesForTeam = useCallback(
+    (teamId: string) => {
+      const sessionTeam = sessionTeams.find((team) => team.id === teamId);
+      if (!sessionTeam) {
+        return [];
+      }
+
+      return sessionTeam.playerIds
+        .map((id) => sessionPlayers.find((player) => player.id === id)?.username || "")
+        .filter(Boolean);
+    },
+    [sessionPlayers, sessionTeams],
+  );
 
   const removeHostTeam = (teamId: string) => {
     setHostTeams((previous) => {
       if (previous.length <= 1) {
         return previous;
       }
-
       return previous.filter((team) => team.id !== teamId);
     });
     setIsTeamsSaved(false);
+  };
+
+  useEffect(() => {
+    if (!sessionCode) {
+      return;
+    }
+
+    let isCancelled = false;
+
+    const syncSession = async () => {
+      try {
+        await fetchSession();
+      } catch {
+        if (!isCancelled) {
+          setStatusMessage("Cannot sync session state. Check if API is running.");
+        }
+      }
+    };
+
+    void syncSession();
+    const intervalId = window.setInterval(syncSession, 2000);
+
+    return () => {
+      isCancelled = true;
+      window.clearInterval(intervalId);
+    };
+  }, [fetchSession, sessionCode]);
+
+  const handleStartGame = async () => {
+    if (!isHost || !sessionCode || isStartingGame) {
+      return;
+    }
+
+    setIsStartingGame(true);
+    setStatusMessage("");
+
+    try {
+      const response = await fetch(`${apiBaseUrl}/api/sessions/${sessionCode}/start`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ hostPlayerId: playerId }),
+      });
+
+      const payload = await response.json();
+
+      if (!response.ok) {
+        setStatusMessage(payload?.error || "Could not start game.");
+        return;
+      }
+
+      setHasGameStarted(true);
+      startedRedirectRef.current = true;
+      const params = new URLSearchParams({ username, sessionCode, playerId });
+      router.push(`/board?${params.toString()}`);
+    } catch {
+      setStatusMessage("Could not reach API. Start incident_game_api first.");
+    } finally {
+      setIsStartingGame(false);
+    }
+  };
+
+  const handleSaveTeams = async () => {
+    if (!isHost || !sessionCode || !playerId) {
+      setStatusMessage("Only the host can save teams.");
+      return;
+    }
+
+    setStatusMessage("");
+
+    try {
+      const hasEmptyTeamName = hostTeams.some((team) => !team.name.trim());
+      if (hasEmptyTeamName) {
+        setStatusMessage("Each team must have a name before saving.");
+        return;
+      }
+
+      const payload = {
+        hostPlayerId: playerId,
+        teams: hostTeams.map((team) => ({
+          name: team.name.trim(),
+          players: getPlayerNamesForTeam(team.id),
+        })),
+      };
+
+      const response = await fetch(`${apiBaseUrl}/api/sessions/${sessionCode}/teams`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(payload),
+      });
+
+      const body = await response.json();
+      if (!response.ok) {
+        setStatusMessage(body?.error || "Could not save teams.");
+        return;
+      }
+
+      const players = Array.isArray(body.session?.players) ? body.session.players : [];
+      const teams = Array.isArray(body.session?.teams) ? body.session.teams : [];
+      setSessionPlayers(players);
+      setSessionTeams(teams);
+      if (!selectedTeam && teams.length > 0) {
+        setSelectedTeam(teams[0].id);
+      }
+
+      setIsTeamsSaved(true);
+      setStatusMessage("Teams saved for all players.");
+    } catch {
+      setStatusMessage("Could not reach API. Start incident_game_api first.");
+    }
+  };
+
+  const handleJoinSelectedTeam = async () => {
+    if (!playerId || !selectedTeam || !sessionCode) {
+      return;
+    }
+
+    setStatusMessage("");
+
+    try {
+      const response = await fetch(`${apiBaseUrl}/api/sessions/${sessionCode}/players/${playerId}/team`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ teamId: selectedTeam }),
+      });
+
+      const payload = await response.json();
+      if (!response.ok) {
+        setStatusMessage(payload?.error || "Could not join selected team.");
+        return;
+      }
+
+      setIsLocked(true);
+      setStatusMessage("Team joined. Waiting for host to start the game.");
+      await fetchSession();
+    } catch {
+      setStatusMessage("Could not reach API. Start incident_game_api first.");
+    }
   };
 
   return (
@@ -149,7 +353,7 @@ export default function BoardPage() {
                       className={`team-builder-card ${team.colorClass}`}
                     >
                       <div className="team-builder-card-head">
-                        <p>{team.name}</p>
+                        <p>{team.name || ""}</p>
                         <button
                           type="button"
                           className="team-delete-btn tc-btn-danger"
@@ -166,16 +370,12 @@ export default function BoardPage() {
                         id={`${team.id}-name`}
                         type="text"
                         value={team.name}
-                        onChange={(event) =>
-                          updateHostTeam(team.id, "name", event.target.value)
-                        }
+                        onChange={(event) => updateHostTeam(team.id, "name", event.target.value)}
+                        placeholder="Enter team name"
                       />
 
                       <ul className="team-players-list" aria-label={`${team.name} players`}>
-                        {team.playersText
-                          .split(",")
-                          .map((player) => player.trim())
-                          .filter(Boolean)
+                        {getPlayerNamesForTeam(team.id)
                           .map((player) => (
                             <li key={`${team.id}-${player}`} className="team-player-line">
                               <span className="team-player-avatar" aria-hidden="true">
@@ -184,6 +384,11 @@ export default function BoardPage() {
                               <span className="team-player-name">{player}</span>
                             </li>
                           ))}
+                        {getPlayerNamesForTeam(team.id).length === 0 && (
+                          <li className="team-player-line">
+                            <span className="team-player-name">No players assigned yet</span>
+                          </li>
+                        )}
                       </ul>
                     </article>
                   ))}
@@ -192,14 +397,14 @@ export default function BoardPage() {
             ) : (
               <>
                 <div className="team-card-grid" role="list" aria-label="Teams">
-                  {TEAM_OPTIONS.map((team) => {
+                  {sessionTeams.map((team, index) => {
                     const isSelected = selectedTeam === team.id;
                     return (
                       <button
                         key={team.id}
                         type="button"
                         role="listitem"
-                        className={`team-card team-card-name-only ${team.colorClass} ${isSelected ? "selected" : ""}`}
+                        className={`team-card team-card-name-only ${TEAM_COLOR_CLASSES[index % TEAM_COLOR_CLASSES.length]} ${isSelected ? "selected" : ""}`}
                         onClick={() => {
                           setSelectedTeam(team.id);
                           setIsLocked(false);
@@ -207,7 +412,7 @@ export default function BoardPage() {
                       >
                         <div className="team-card-head">
                           <strong>{team.name}</strong>
-                          <span className="team-size-badge">{team.players.length} players</span>
+                          <span className="team-size-badge">{team.playerIds.length} players</span>
                         </div>
                         <small>{isSelected ? "Selected" : "Click to select"}</small>
                       </button>
@@ -222,39 +427,34 @@ export default function BoardPage() {
             {mode === "create" ? (
               <>
                 <h3>PLAYERS: {sessionPlayers.length}</h3>
+                <p className="team-select-help">
+                  {isHost
+                    ? "You are host. Starting game will move all session players to board automatically."
+                    : "Waiting for host rights..."}
+                </p>
                 <div className="tc-player-list">
-                  {sessionPlayers.map((player, index) => (
-                    <p key={`${player}-${index}`} className="tc-player-item">
-                      {player}
+                  {sessionPlayers.map((player) => (
+                    <p key={player.id} className="tc-player-item">
+                      {player.username}
                     </p>
                   ))}
                 </div>
 
-                <button
-                  type="button"
-                  className="tc-btn"
-                  onClick={() => {
-                    setIsTeamsSaved(true);
-                    setHasGameStarted(false);
-                  }}
-                >
+                <button type="button" className="tc-btn" onClick={handleSaveTeams}>
                   Save Teams
                 </button>
 
                 <button
                   type="button"
                   className="tc-btn"
-                  disabled={!isTeamsSaved || hasGameStarted}
-                  onClick={() => {
-                    setHasGameStarted(true);
-                    const params = new URLSearchParams({
-                      username,
-                      sessionCode,
-                    });
-                    router.push(`/board?${params.toString()}`);
-                  }}
+                  disabled={!isHost || !isTeamsSaved || hasGameStarted}
+                  onClick={handleStartGame}
                 >
-                  {hasGameStarted ? "Game Started" : "Start Game"}
+                  {hasGameStarted
+                    ? "Game Started"
+                    : isStartingGame
+                      ? "Starting..."
+                      : "Start Game"}
                 </button>
               </>
             ) : (
@@ -271,12 +471,17 @@ export default function BoardPage() {
                 <button
                   type="button"
                   className="tc-btn"
-                  onClick={() => setIsLocked(true)}
+                  onClick={handleJoinSelectedTeam}
+                  disabled={!selectedTeam || isLocked}
                 >
-                  {isLocked ? "Team Locked" : `Join ${selectedTeamInfo?.name}`}
+                  {isLocked ? "Team Locked" : `Join ${selectedTeamInfo?.name || "Team"}`}
                 </button>
+                <p className="team-select-help">
+                  Waiting for host to start the game. You will enter the board automatically.
+                </p>
               </>
             )}
+            {statusMessage && <p className="team-select-help">{statusMessage}</p>}
             <Link href="/" className="tc-back-link" aria-label="Back to menu">
               Back to Menu
             </Link>
