@@ -1,8 +1,7 @@
 "use client";
 
-import Link from "next/link";
-import { useSearchParams } from "next/navigation";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 type Category = "red" | "blue" | "green";
 type SpaceType = Category | "neutral";
@@ -98,6 +97,7 @@ function hasAllWedges(team: TeamState | null) {
 }
 
 export default function GameBoardClient() {
+  const router = useRouter();
   const searchParams = useSearchParams();
   const username = searchParams.get("username")?.trim() || "";
   const sessionCode = searchParams.get("sessionCode")?.trim() || "";
@@ -124,6 +124,8 @@ export default function GameBoardClient() {
   const timeoutSubmitQuestionKeyRef = useRef("");
   const qcmShowTimeoutRef = useRef<number | null>(null);
   const qcmHideTimeoutRef = useRef<number | null>(null);
+  const leaveNotifiedRef = useRef(false);
+  const suppressLeaveRef = useRef(false);
 
   const currentTeam =
     gameState && gameState.teams.length > 0
@@ -148,6 +150,31 @@ export default function GameBoardClient() {
       qcmHideTimeoutRef.current = null;
     }
   };
+
+  const notifyLeaveSession = useCallback(() => {
+    if (!sessionCode || !playerId || leaveNotifiedRef.current || suppressLeaveRef.current) {
+      return;
+    }
+
+    leaveNotifiedRef.current = true;
+    const url = `${apiBaseUrl}/api/sessions/${sessionCode}/leave`;
+    const body = JSON.stringify({ playerId });
+
+    if (navigator.sendBeacon) {
+      const blob = new Blob([body], { type: "application/json" });
+      navigator.sendBeacon(url, blob);
+      return;
+    }
+
+    void fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body,
+      keepalive: true,
+    });
+  }, [apiBaseUrl, playerId, sessionCode]);
 
   const syncGameState = async () => {
     if (!sessionCode) {
@@ -204,6 +231,23 @@ export default function GameBoardClient() {
       clearQcmTimers();
     };
   }, []);
+
+  useEffect(() => {
+    if (!sessionCode || !playerId) {
+      return;
+    }
+
+    const handleBeforeUnload = () => {
+      notifyLeaveSession();
+    };
+
+    window.addEventListener("beforeunload", handleBeforeUnload);
+
+    return () => {
+      notifyLeaveSession();
+      window.removeEventListener("beforeunload", handleBeforeUnload);
+    };
+  }, [notifyLeaveSession, playerId, sessionCode]);
 
   useEffect(() => {
     const rollSequence = Number(gameState?.rollSequence || 0);
@@ -498,6 +542,30 @@ export default function GameBoardClient() {
 
   const actionLocked = busy || Boolean(qcmFeedback) || isDiceRolling;
 
+  const onQuitBoard = async () => {
+    if (!sessionCode || !playerId) {
+      suppressLeaveRef.current = true;
+      router.push("/");
+      return;
+    }
+
+    leaveNotifiedRef.current = true;
+    try {
+      await fetch(`${apiBaseUrl}/api/sessions/${sessionCode}/leave`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ playerId }),
+      });
+    } catch {
+      // Navigation should proceed even if leave request fails.
+    } finally {
+      suppressLeaveRef.current = true;
+      router.push("/");
+    }
+  };
+
   return (
     <div className="page-shell board-shell">
       <main className="board-wrap">
@@ -508,9 +576,14 @@ export default function GameBoardClient() {
           </div>
           <div className="board-top-actions">
             <p className="board-energy">Session {sessionCode || "-"}</p>
-            <Link href="/" className="board-home-btn" aria-label="Quit to main menu">
+            <button
+              type="button"
+              className="board-home-btn"
+              aria-label="Quit to main menu"
+              onClick={onQuitBoard}
+            >
               Quit
-            </Link>
+            </button>
           </div>
         </section>
 

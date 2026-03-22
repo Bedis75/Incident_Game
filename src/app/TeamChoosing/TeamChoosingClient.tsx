@@ -1,6 +1,4 @@
 "use client";
-
-import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -16,6 +14,21 @@ type SessionTeam = {
   id: string;
   name: string;
   playerIds: string[];
+};
+
+type ActivityEvent = {
+  id: string;
+  at: string;
+  type: string;
+  message: string;
+  playerId?: string;
+  username?: string;
+  teamId?: string | null;
+};
+
+type ToastNotice = {
+  id: string;
+  message: string;
 };
 
 type HostTeamDraft = {
@@ -50,6 +63,8 @@ export default function TeamChoosingClient() {
   const [sessionHostPlayerId, setSessionHostPlayerId] = useState(hostPlayerIdFromParams);
   const [sessionPlayers, setSessionPlayers] = useState<SessionPlayer[]>([]);
   const [sessionTeams, setSessionTeams] = useState<SessionTeam[]>([]);
+  const [activityEvents, setActivityEvents] = useState<ActivityEvent[]>([]);
+  const [toasts, setToasts] = useState<ToastNotice[]>([]);
   const [hostTeams, setHostTeams] = useState<HostTeamDraft[]>([
     {
       id: "team-custom-1",
@@ -65,6 +80,10 @@ export default function TeamChoosingClient() {
 
   const startedRedirectRef = useRef(false);
   const didHydrateHostTeamsRef = useRef(false);
+  const didPrimeEventsRef = useRef(false);
+  const seenEventIdsRef = useRef<Set<string>>(new Set());
+  const leaveNotifiedRef = useRef(false);
+  const suppressLeaveRef = useRef(false);
 
   const isHost = Boolean(sessionHostPlayerId && playerId && sessionHostPlayerId === playerId);
 
@@ -81,6 +100,18 @@ export default function TeamChoosingClient() {
     [selectedTeam, sessionPlayers],
   );
 
+  const pushToast = useCallback((message: string) => {
+    const notice = {
+      id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+      message,
+    };
+
+    setToasts((previous) => [...previous.slice(-2), notice]);
+    window.setTimeout(() => {
+      setToasts((previous) => previous.filter((toast) => toast.id !== notice.id));
+    }, 4200);
+  }, []);
+
   const fetchSession = useCallback(async () => {
     if (!sessionCode) {
       return;
@@ -94,13 +125,48 @@ export default function TeamChoosingClient() {
     }
 
     const hostId = payload.session.hostPlayerId || "";
-    const players = Array.isArray(payload.session.players) ? payload.session.players : [];
-    const teams = Array.isArray(payload.session.teams) ? payload.session.teams : [];
+    const players: SessionPlayer[] = Array.isArray(payload.session.players)
+      ? payload.session.players
+      : [];
+    const teams: SessionTeam[] = Array.isArray(payload.session.teams)
+      ? payload.session.teams
+      : [];
+    const events = Array.isArray(payload.session.activityEvents)
+      ? (payload.session.activityEvents as ActivityEvent[])
+      : [];
 
     setSessionHostPlayerId(hostId);
     setSessionPlayers(players);
     setSessionTeams(teams);
+    setActivityEvents(events);
     setIsTeamsSaved(teams.length > 0);
+
+    if (!didPrimeEventsRef.current) {
+      for (const event of events) {
+        seenEventIdsRef.current.add(event.id);
+      }
+      didPrimeEventsRef.current = true;
+    } else {
+      const unseen = events.filter((event) => !seenEventIdsRef.current.has(event.id));
+      for (const event of unseen) {
+        seenEventIdsRef.current.add(event.id);
+        if (
+          event.type === "player-left" ||
+          event.type === "player-rejoined" ||
+          event.type === "player-kicked"
+        ) {
+          pushToast(event.message);
+        }
+      }
+    }
+
+    const currentPlayerExists = players.some((player) => player.id === playerId);
+    if (playerId && !currentPlayerExists && !isHost) {
+      setStatusMessage("You are no longer in this session.");
+      suppressLeaveRef.current = true;
+      window.setTimeout(() => router.push("/"), 700);
+      return;
+    }
 
     if (!selectedTeam && teams.length > 0) {
       setSelectedTeam(teams[0].id);
@@ -120,10 +186,11 @@ export default function TeamChoosingClient() {
     if (payload.session.status === "in-game" && !startedRedirectRef.current) {
       startedRedirectRef.current = true;
       setHasGameStarted(true);
+      suppressLeaveRef.current = true;
       const params = new URLSearchParams({ username, sessionCode, playerId });
       router.push(`/board?${params.toString()}`);
     }
-  }, [apiBaseUrl, playerId, router, selectedTeam, sessionCode, username]);
+  }, [apiBaseUrl, isHost, playerId, pushToast, router, selectedTeam, sessionCode, username]);
 
   const updateHostTeam = (teamId: string, field: "name", value: string) => {
     setHostTeams((previous) =>
@@ -188,8 +255,16 @@ export default function TeamChoosingClient() {
     const syncSession = async () => {
       try {
         await fetchSession();
-      } catch {
+      } catch (error) {
         if (!isCancelled) {
+          const message = error instanceof Error ? error.message : "Cannot sync session state.";
+          if (message.toLowerCase().includes("session not found")) {
+            setStatusMessage("Session has been closed by host.");
+            suppressLeaveRef.current = true;
+            window.setTimeout(() => router.push("/"), 900);
+            return;
+          }
+
           setStatusMessage("Cannot sync session state. Check if API is running.");
         }
       }
@@ -202,7 +277,49 @@ export default function TeamChoosingClient() {
       isCancelled = true;
       window.clearInterval(intervalId);
     };
-  }, [fetchSession, sessionCode]);
+  }, [fetchSession, router, sessionCode]);
+
+  useEffect(() => {
+    if (!sessionCode || !playerId) {
+      return;
+    }
+
+    const notifyLeave = () => {
+      if (leaveNotifiedRef.current || suppressLeaveRef.current) {
+        return;
+      }
+
+      leaveNotifiedRef.current = true;
+      const url = `${apiBaseUrl}/api/sessions/${sessionCode}/leave`;
+      const body = JSON.stringify({ playerId });
+
+      if (navigator.sendBeacon) {
+        const blob = new Blob([body], { type: "application/json" });
+        navigator.sendBeacon(url, blob);
+        return;
+      }
+
+      void fetch(url, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body,
+        keepalive: true,
+      });
+    };
+
+    const handleBeforeUnload = () => {
+      notifyLeave();
+    };
+
+    window.addEventListener("beforeunload", handleBeforeUnload);
+
+    return () => {
+      notifyLeave();
+      window.removeEventListener("beforeunload", handleBeforeUnload);
+    };
+  }, [apiBaseUrl, playerId, sessionCode]);
 
   const handleStartGame = async () => {
     if (!isHost || !sessionCode || isStartingGame) {
@@ -230,6 +347,7 @@ export default function TeamChoosingClient() {
 
       setHasGameStarted(true);
       startedRedirectRef.current = true;
+      suppressLeaveRef.current = true;
       const params = new URLSearchParams({ username, sessionCode, playerId });
       router.push(`/board?${params.toString()}`);
     } catch {
@@ -321,8 +439,86 @@ export default function TeamChoosingClient() {
     }
   };
 
+  const handleKickPlayer = async (targetPlayerId: string) => {
+    if (!isHost || !sessionCode || !playerId) {
+      return;
+    }
+
+    setStatusMessage("");
+
+    try {
+      const response = await fetch(
+        `${apiBaseUrl}/api/sessions/${sessionCode}/players/${targetPlayerId}/kick`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ hostPlayerId: playerId }),
+        },
+      );
+
+      const payload = await response.json();
+      if (!response.ok) {
+        setStatusMessage(payload?.error || "Could not remove player.");
+        return;
+      }
+
+      setSessionPlayers(Array.isArray(payload.session?.players) ? payload.session.players : []);
+      setSessionTeams(Array.isArray(payload.session?.teams) ? payload.session.teams : []);
+      setActivityEvents(
+        Array.isArray(payload.session?.activityEvents) ? payload.session.activityEvents : [],
+      );
+      setStatusMessage("Player removed by host.");
+    } catch {
+      setStatusMessage("Could not reach API. Start incident_game_api first.");
+    }
+  };
+
+  const handleLeaveSession = async () => {
+    if (!sessionCode || !playerId) {
+      router.push("/");
+      return;
+    }
+
+    leaveNotifiedRef.current = true;
+    setStatusMessage("");
+
+    try {
+      const response = await fetch(`${apiBaseUrl}/api/sessions/${sessionCode}/leave`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ playerId }),
+      });
+
+      const payload = await response.json();
+      if (!response.ok) {
+        setStatusMessage(payload?.error || "Could not leave session.");
+        leaveNotifiedRef.current = false;
+        return;
+      }
+
+      suppressLeaveRef.current = true;
+      router.push("/");
+    } catch {
+      setStatusMessage("Could not reach API. Start incident_game_api first.");
+      leaveNotifiedRef.current = false;
+    }
+  };
+
   return (
     <div className="page-shell tc-shell">
+      {toasts.length > 0 && (
+        <aside className="tc-toast-stack" aria-live="polite">
+          {toasts.map((toast) => (
+            <p key={toast.id} className="tc-toast-item">
+              {toast.message}
+            </p>
+          ))}
+        </aside>
+      )}
       <main className="tc-wrap">
         <header className="tc-header">
           <h1>Incident Management Champion</h1>
@@ -429,9 +625,21 @@ export default function TeamChoosingClient() {
                 </p>
                 <div className="tc-player-list">
                   {sessionPlayers.map((player) => (
-                    <p key={player.id} className="tc-player-item">
-                      {player.username}
-                    </p>
+                    <div key={player.id} className="tc-player-item-row">
+                      <p className="tc-player-item tc-player-name">
+                        {player.username}
+                        {player.isHost ? " (Host)" : ""}
+                      </p>
+                      {isHost && !player.isHost && player.id !== playerId && (
+                        <button
+                          type="button"
+                          className="tc-kick-btn"
+                          onClick={() => handleKickPlayer(player.id)}
+                        >
+                          Kick
+                        </button>
+                      )}
+                    </div>
                   ))}
                 </div>
 
@@ -477,9 +685,25 @@ export default function TeamChoosingClient() {
               </>
             )}
             {statusMessage && <p className="team-select-help">{statusMessage}</p>}
-            <Link href="/" className="tc-back-link" aria-label="Back to menu">
-              Back to Menu
-            </Link>
+            {activityEvents.length > 0 && (
+              <div className="tc-activity-feed" aria-label="Recent activity">
+                {activityEvents
+                  .slice(-5)
+                  .reverse()
+                  .map((event) => (
+                    <p key={event.id} className="tc-activity-line">
+                      {event.message}
+                    </p>
+                  ))}
+              </div>
+            )}
+            <button
+              type="button"
+              className="tc-btn tc-btn-small tc-btn-danger tc-leave-btn"
+              onClick={handleLeaveSession}
+            >
+              Leave Session
+            </button>
           </aside>
         </section>
       </main>

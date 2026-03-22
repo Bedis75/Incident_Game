@@ -411,6 +411,28 @@ ol {
   gap: 0.9rem;
 }
 
+.tc-toast-stack {
+  position: fixed;
+  right: 1rem;
+  top: 1rem;
+  z-index: 60;
+  display: grid;
+  gap: 0.45rem;
+  width: min(360px, calc(100vw - 2rem));
+}
+
+.tc-toast-item {
+  margin: 0;
+  border-radius: 10px;
+  border: 1px solid #5e58d6;
+  background: linear-gradient(90deg, #2f2a77, #3a3289);
+  color: #f2f1ff;
+  box-shadow: 0 8px 24px #0e0b2f80;
+  padding: 0.55rem 0.75rem;
+  font-weight: 700;
+  animation: tc-toast-in 280ms ease-out;
+}
+
 .tc-header {
   display: flex;
   justify-content: space-between;
@@ -510,6 +532,32 @@ ol {
   font-weight: 700;
 }
 
+.tc-player-item-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.45rem;
+  align-items: center;
+}
+
+.tc-player-name {
+  overflow-wrap: anywhere;
+}
+
+.tc-kick-btn {
+  border: 1px solid #8f67ff;
+  border-radius: 8px;
+  background: #3a2f77;
+  color: #f4f3ff;
+  padding: 0.35rem 0.6rem;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.tc-kick-btn:hover,
+.tc-kick-btn:focus-visible {
+  background: #4a3a8f;
+}
+
 .tc-btn {
   width: 100%;
   border: 1px solid #5f58d2;
@@ -535,10 +583,32 @@ ol {
   width: auto;
 }
 
+.tc-btn-alt {
+  background: #352d7b;
+  border-color: #5f58d2;
+}
+
+.tc-btn-alt:hover,
+.tc-btn-alt:focus-visible {
+  background: #40368d;
+}
+
 .tc-btn-danger {
-  background: #3a2f77;
-  color: #f6f4ff;
-  border-color: #8061df;
+  background: linear-gradient(90deg, #c74444, #a93535);
+  color: #fff7f7;
+  border-color: #de6b6b;
+}
+
+.tc-btn-danger:hover,
+.tc-btn-danger:focus-visible {
+  background: linear-gradient(90deg, #d75454, #b63f3f);
+}
+
+.tc-leave-btn {
+  width: auto;
+  justify-self: start;
+  padding: 0.44rem 0.75rem;
+  font-size: 0.92rem;
 }
 
 .tc-back-link {
@@ -553,6 +623,33 @@ ol {
 .tc-back-link:focus-visible {
   color: #f1f0ff;
   border-bottom-color: #f1f0ff;
+}
+
+.tc-activity-feed {
+  display: grid;
+  gap: 0.35rem;
+  border: 1px solid #4f4ab0;
+  border-radius: 8px;
+  background: #2a2668;
+  padding: 0.45rem;
+}
+
+.tc-activity-line {
+  margin: 0;
+  color: #e7e5ff;
+  font-size: 0.9rem;
+}
+
+@keyframes tc-toast-in {
+  from {
+    transform: translateY(-6px);
+    opacity: 0;
+  }
+
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
 }
 
 .sr-only {
