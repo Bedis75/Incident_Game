@@ -729,6 +729,26 @@ ol {
   text-decoration: none;
   border: 1px solid #4d49a6;
   font-weight: 700;
+  cursor: pointer;
+  transition:
+    transform 150ms ease,
+    box-shadow 150ms ease,
+    background-color 150ms ease,
+    border-color 150ms ease,
+    color 150ms ease;
+}
+
+.board-home-btn:hover,
+.board-home-btn:focus-visible {
+  transform: translateY(-2px);
+  background: #3d3a91;
+  border-color: #7f79ff;
+  color: #ffffff;
+  box-shadow: 0 8px 16px #14113a66;
+}
+
+.board-home-btn:active {
+  transform: translateY(0);
 }
 
 .board-meta {
